@@ -1,56 +1,55 @@
-CREATE PROCEDURE GetWorkingHours
+USE AdventureWorks;
+GO
+
+CREATE PROCEDURE dbo.GetWorkingHoursExcludingSundaysAndFirstTwoSaturdays
     @StartDate DATETIME,
-    @EndDate DATETIME
+    @EndDate DATETIME,
+    @WorkingHours INT OUTPUT
 AS
 BEGIN
     SET NOCOUNT ON;
 
-    -- Temp table to store date and exclusion status
-    DECLARE @DateList TABLE (
-        WorkDate DATETIME,
-        IsExcluded BIT
-    );
+    DECLARE @CurrentDate DATETIME = @StartDate;
+    DECLARE @TotalHours INT = 0;
 
-    DECLARE @CurrDate DATETIME = CAST(@StartDate AS DATE);
-
-    WHILE @CurrDate <= @EndDate
+    WHILE @CurrentDate < @EndDate
     BEGIN
-        DECLARE @IsExcluded BIT = 0;
+        DECLARE @WeekDayName NVARCHAR(10) = DATENAME(WEEKDAY, @CurrentDate);
 
-        -- Check if it's Sunday
-        IF DATENAME(WEEKDAY, @CurrDate) = 'Sunday'
-            SET @IsExcluded = 1;
-
-        -- Check for 1st and 2nd Saturdays
-        IF DATENAME(WEEKDAY, @CurrDate) = 'Saturday'
+        IF @WeekDayName <> 'Sunday'
         BEGIN
-            DECLARE @MonthStart DATE = DATEFROMPARTS(YEAR(@CurrDate), MONTH(@CurrDate), 1);
-            DECLARE @Saturdays TABLE (SatDate DATE);
-            DECLARE @DayCursor DATE = @MonthStart;
-
-            WHILE MONTH(@DayCursor) = MONTH(@CurrDate)
+            IF @WeekDayName = 'Saturday'
             BEGIN
-                IF DATENAME(WEEKDAY, @DayCursor) = 'Saturday'
-                    INSERT INTO @Saturdays VALUES (@DayCursor);
-                SET @DayCursor = DATEADD(DAY, 1, @DayCursor);
+                -- Calculate the first day of the current month
+                DECLARE @MonthStart DATETIME = DATEFROMPARTS(YEAR(@CurrentDate), MONTH(@CurrentDate), 1);
+
+                -- Count how many Saturdays have occurred this month up to the current date
+                DECLARE @SaturdaysCount INT = (
+                    SELECT COUNT(*) 
+                    FROM (
+                        SELECT TOP (DAY(@CurrentDate))
+                            DATEADD(DAY, number, @MonthStart) AS Day
+                        FROM master.dbo.spt_values
+                        WHERE type = 'P' AND number < 31
+                    ) AS Dates
+                    WHERE DATENAME(WEEKDAY, Day) = 'Saturday'
+                );
+
+                -- Only count this hour if it's NOT 1st or 2nd Saturday
+                IF @SaturdaysCount > 2
+                    SET @TotalHours += 1;
             END
-
-            IF EXISTS (
-                SELECT 1 FROM (
-                    SELECT TOP 2 ROW_NUMBER() OVER (ORDER BY SatDate) AS RowNum, SatDate
-                    FROM @Saturdays
-                ) AS SatCheck
-                WHERE SatDate = @CurrDate
-            )
-                SET @IsExcluded = 1;
+            ELSE
+            BEGIN
+                -- Not a Saturday or Sunday, count the hour
+                SET @TotalHours += 1;
+            END
         END
 
-        -- Do NOT exclude if it's StartDate or EndDate
-        IF CAST(@CurrDate AS DATE) = CAST(@StartDate AS DATE)
-            OR CAST(@CurrDate AS DATE) = CAST(@EndDate AS DATE)
-        BEGIN
-            SET @IsExcluded = 0;
-        END
+        -- Move to next hour
+        SET @CurrentDate = DATEADD(HOUR, 1, @CurrentDate);
+    END
 
-        INSERT INTO @DateList (WorkDate, IsExcluded)
-        VALUES (@CurrDate
+    SET @WorkingHours = @TotalHours;
+END
+GO
